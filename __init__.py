@@ -1,4 +1,3 @@
-import glob
 import json
 import os
 
@@ -7,21 +6,9 @@ import numpy as np
 import torch
 from torchvision.transforms import transforms
 
-from models import densenet121, resmasking_dropout1
+from models import resmasking_dropout1
 
 from .version import __version__
-
-
-def show(img, name="disp", width=1000):
-    """
-    name: name of window, should be name of img
-    img: source of img, should in type ndarray
-    """
-    cv2.namedWindow(name, cv2.WINDOW_GUI_NORMAL)
-    cv2.resizeWindow(name, width, 1000)
-    cv2.imshow(name, img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
 
 
 checkpoint_url = "https://github.com/phamquiluan/ResidualMaskingNetwork/releases/download/v0.0.1/Z_resmasking_dropout1_rot30_2019Nov30_13.32"
@@ -36,27 +23,13 @@ local_ssd_checkpoint_path = "res10_300x300_ssd_iter_140000.caffemodel"
 
 def download_checkpoint(remote_url, local_path):
     import requests
-    from tqdm import tqdm
 
     response = requests.get(remote_url, stream=True)
-    total_size_in_bytes = int(response.headers.get("content-length", 0))
     block_size = 1024  # 1 Kibibyte
-
-    progress_bar = tqdm(
-        desc=f"Downloading {local_path}..",
-        total=total_size_in_bytes,
-        unit="iB",
-        unit_scale=True,
-    )
 
     with open(local_path, "wb") as ref:
         for data in response.iter_content(block_size):
-            progress_bar.update(len(data))
             ref.write(data)
-
-    progress_bar.close()
-    if total_size_in_bytes != 0 and progress_bar.n != total_size_in_bytes:
-        print("ERROR, something went wrong")
 
 
 for remote_path, local_path in [
@@ -149,133 +122,51 @@ class RMN:
             self.face_detector = get_ssd_face_detector()
         self.emo_model = get_emo_model()
 
-    @torch.no_grad()
-    def detect_emotion_for_single_face_image(self, face_image):
-        """
-        Params:
-        -----------
-        face_image : np.ndarray
-            a cropped face image
+    # @torch.no_grad()
+    # def detect_emotion_for_single_face_image(self, face_image):
+    #     """
+    #     Params:
+    #     -----------
+    #     face_image : np.ndarray
+    #         a cropped face image
 
-        Return:
-        -----------
-        emo_label : str
-            dominant emotion label
+    #     Return:
+    #     -----------
+    #     emo_label : str
+    #         dominant emotion label
 
-        emo_proba : float
-            dominant emotion proba
+    #     emo_proba : float
+    #         dominant emotion proba
 
-        proba_list : list
-            all emotion label and their proba
-        """
-        assert isinstance(face_image, np.ndarray)
-        face_image = ensure_color(face_image)
-        face_image = cv2.resize(face_image, image_size)
+    #     proba_list : list
+    #         all emotion label and their proba
+    #     """
+    #     assert isinstance(face_image, np.ndarray)
+    #     face_image = ensure_color(face_image)
+    #     face_image = cv2.resize(face_image, image_size)
 
-        face_image = transform(face_image)
-        if is_cuda:
-            face_image = face_image.cuda(0)
+    #     face_image = transform(face_image)
+    #     if is_cuda:
+    #         face_image = face_image.cuda(0)
 
-        face_image = torch.unsqueeze(face_image, dim=0)
+    #     face_image = torch.unsqueeze(face_image, dim=0)
 
-        output = torch.squeeze(self.emo_model(face_image), 0)
-        proba = torch.softmax(output, 0)
+    #     output = torch.squeeze(self.emo_model(face_image), 0)
+    #     proba = torch.softmax(output, 0)
 
-        # get dominant emotion
-        emo_proba, emo_idx = torch.max(proba, dim=0)
-        emo_idx = emo_idx.item()
-        emo_proba = emo_proba.item()
-        emo_label = FER_2013_EMO_DICT[emo_idx]
+    #     # get dominant emotion
+    #     emo_proba, emo_idx = torch.max(proba, dim=0)
+    #     emo_idx = emo_idx.item()
+    #     emo_proba = emo_proba.item()
+    #     emo_label = FER_2013_EMO_DICT[emo_idx]
 
-        # get proba for each emotion
-        proba = proba.tolist()
-        proba_list = []
-        for emo_idx, emo_name in FER_2013_EMO_DICT.items():
-            proba_list.append({emo_name: proba[emo_idx]})
+    #     # get proba for each emotion
+    #     proba = proba.tolist()
+    #     proba_list = []
+    #     for emo_idx, emo_name in FER_2013_EMO_DICT.items():
+    #         proba_list.append({emo_name: proba[emo_idx]})
 
-        return emo_label, emo_proba, proba_list
-
-    @torch.no_grad()
-    def video_demo(self):
-        vid = cv2.VideoCapture(0)
-
-        while True:
-            ret, frame = vid.read()
-            if frame is None or ret is not True:
-                continue
-
-            try:
-                frame = np.fliplr(frame).astype(np.uint8)
-
-                results = self.detect_emotion_for_single_frame(frame)
-                frame = self.draw(frame, results)
-
-                cv2.rectangle(frame, (1, 1), (220, 25), (223, 128, 255), cv2.FILLED)
-                cv2.putText(
-                    frame,
-                    f"press q to exit",
-                    (20, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 0, 0),
-                    2,
-                )
-                cv2.imshow("disp", frame)
-                if cv2.waitKey(1) == ord("q"):
-                    break
-
-            except Exception as err:
-                print(err)
-                continue
-
-        cv2.destroyAllWindows()
-
-    @staticmethod
-    def draw(frame, results):
-        """
-        Params:
-        ---------
-        frame : np.ndarray
-
-        results : list of dict.keys('xmin', 'xmax', 'ymin', 'ymax', 'emo_label', 'emo_proba')
-
-        Returns:
-        ---------
-        frame : np.ndarray
-        """
-        for r in results:
-            xmin = r["xmin"]
-            xmax = r["xmax"]
-            ymin = r["ymin"]
-            ymax = r["ymax"]
-            emo_label = r["emo_label"]
-            emo_proba = r["emo_proba"]
-
-            label_size, base_line = cv2.getTextSize(
-                f"{emo_label}: 000", cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2
-            )
-
-            # draw face
-            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (179, 255, 179), 2)
-
-            cv2.rectangle(
-                frame,
-                (xmax, ymin + 1 - label_size[1]),
-                (xmax + label_size[0], ymin + 1 + base_line),
-                (223, 128, 255),
-                cv2.FILLED,
-            )
-            cv2.putText(
-                frame,
-                f"{emo_label} {int(emo_proba * 100)}",
-                (xmax, ymin + 1),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 0, 0),
-                2,
-            )
-
-        return frame
+    #     return emo_label, emo_proba, proba_list
 
     def detect_faces(self, frame):
         h, w = frame.shape[:2]
